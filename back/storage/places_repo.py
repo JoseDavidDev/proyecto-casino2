@@ -173,38 +173,36 @@ class PlaceStorage:
 
     @staticmethod
     def activar_casino(codigo_casino: int, actor: str = "system") -> bool:
-    """
-       Marca un casino como ACTIVO (estado = True) y registra auditoría.
-       Retorna True si se activó, lanza KeyError si no existe.
-       """
+        """
+        Marca un casino como ACTIVO (estado = True) y registra auditoría.
+        Retorna True si se activó, lanza KeyError si no existe.
+        """
+        PlaceStorage._ensure_csv_exists()
+        df = pd.read_csv(PLACES_CSV)
 
-       PlaceStorage._ensure_csv_exists()
-       df = pd.read_csv(PLACES_CSV)
+        if codigo_casino not in df["id"].values:
+            raise KeyError(f"No existe un casino con ID {codigo_casino}")
 
-       if codigo_casino not in df["id"].values:
-          raise KeyError(f"No existe un casino con ID {codigo_casino}")
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-       timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if 'updated_at' not in df.columns:
+            df['updated_at'] = ''
+        if 'updated_by' not in df.columns:
+            df['updated_by'] = ''
 
-       if 'updated_at' not in df.columns:
-         df['updated_at'] = ''
-       if 'updated_by' not in df.columns:
-         df['updated_by'] = ''
+        df['updated_at'] = df['updated_at'].astype(object)
+        df['updated_by'] = df['updated_by'].astype(object)
 
-       df['updated_at'] = df['updated_at'].astype(object)
-       df['updated_by'] = df['updated_by'].astype(object)
+        df.loc[df["id"] == codigo_casino, "estado"] = True
+        df.loc[df["id"] == codigo_casino, "updated_at"] = timestamp
+        df.loc[df["id"] == codigo_casino, "updated_by"] = actor
 
-       df.loc[df["id"] == codigo_casino, "estado"] = True
-       df.loc[df["id"] == codigo_casino, "updated_at"] = timestamp
-       df.loc[df["id"] == codigo_casino, "updated_by"] = actor
+        df.to_csv(PLACES_CSV, index=False)
+        return True
 
-       df.to_csv(PLACES_CSV, index=False)
-       return True
-
-
-@staticmethod
-def activar(codigo_casino: int, actor: str = "system") -> bool:
-    return PlaceStorage.activar_casino(codigo_casino, actor=actor)
+    @staticmethod
+    def activar(codigo_casino: int, actor: str = "system") -> bool:
+        return PlaceStorage.activar_casino(codigo_casino, actor=actor)
 
 
     @staticmethod
