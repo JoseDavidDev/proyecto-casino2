@@ -60,9 +60,66 @@
 
 from fastapi import APIRouter, HTTPException
 from back.domain.places.create import PlaceDomain
-from back.models.places import PlaceIn, PlaceOut
+from back.models.places import PlaceIn, PlaceOut, PlaceUpdate
+from back.domain.places.update import actualizar_casino
+
 
 router = APIRouter()
+
+
+# LISTAR / BUSCAR CASINOS
+@router.get("/casino", response_model=list[PlaceOut])
+def listar_casinos(consulta: str | None = None, solo_activos: bool = True, limite: int = 50, desplazamiento: int = 0):
+    """
+    Lista casinos con opciones de búsqueda y filtrado.
+
+    Query params:
+      - q: texto libre para buscar en nombre, dirección o código
+      - only_active: si True, devuelve solo activos (por defecto True)
+      - limit, offset: paginación (limit máximo 100)
+    """
+    # Validaciones básicas
+    try:
+        if limite is None:
+            limite = 50
+        limite = int(limite)
+        desplazamiento = int(desplazamiento)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Parámetros de paginación inválidos")
+
+    if limite < 0 or desplazamiento < 0:
+        raise HTTPException(status_code=400, detail="limite y desplazamiento deben ser >= 0")
+
+    if limite > 100:
+        limite = 100
+
+    try:
+        from back.storage.places_repo import PlaceStorage
+
+        # Si hay texto de búsqueda, obtener todos los registros (según solo_activos) y filtrar en memoria
+        if consulta:
+            registros = PlaceStorage.listar(solo_activos=solo_activos, limite=None, desplazamiento=0, consulta=consulta)
+            texto_norm = consulta.strip().lower()
+            filtrados = []
+            for r in registros:
+                nombre = str(r.get('nombre', '')).lower()
+                direccion = str(r.get('direccion', '')).lower()
+                codigo = str(r.get('codigo_casino', '')).lower()
+                if texto_norm in nombre or texto_norm in direccion or texto_norm in codigo:
+                    filtrados.append(r)
+
+            # aplicar paginación sobre la lista filtrada
+            resultados = filtrados[desplazamiento: desplazamiento + limite]
+        else:
+            # sin texto, delegar en el repo (que ya soporta solo_activos/limite/desplazamiento)
+            resultados = PlaceStorage.listar(solo_activos=solo_activos, limite=limite, desplazamiento=desplazamiento)
+
+        # Convertir a modelos de salida
+        return [PlaceOut(**r) for r in resultados]
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # --------------------------------------
 # INACTIVAR CASINO
@@ -84,6 +141,24 @@ def inactivar_casino(casino_id: int, actor: str = "system"):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# ACTUALIZAR CASINO
+@router.put("/casino/{casino_id}", response_model=PlaceOut)
+def actualizar_casino_api(casino_id: int, cambios: PlaceUpdate, actor: str = "system"):
+    """
+    Actualiza campos editables del casino. `codigo_casino` no puede modificarse.
+    """
+    try:
+        # Convertir modelo a dict ignorando campos None
+        cambios_dict = {k: v for k, v in cambios.model_dump().items() if v is not None}
+        updated = actualizar_casino(casino_id, cambios_dict, actor=actor)
+        return updated
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Casino no encontrado")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # --------------------------------------
 # CREAR CASINO

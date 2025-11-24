@@ -118,8 +118,8 @@ class PlaceStorage:
             'estado': True,
             'created_at': timestamp,
             'created_by': created_by,
-            'updated_at': None,
-            'updated_by': None
+            'updated_at': '',
+            'updated_by': ''
         }
         
         # Agregar al CSV
@@ -146,10 +146,13 @@ class PlaceStorage:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         # Asegurar columnas de auditoría si faltan
+        # Asegurar columnas de auditoría y tipos como objeto para evitar warnings
         if 'updated_at' not in df.columns:
-            df['updated_at'] = None
+            df['updated_at'] = ''
         if 'updated_by' not in df.columns:
-            df['updated_by'] = None
+            df['updated_by'] = ''
+        df['updated_at'] = df['updated_at'].astype(object)
+        df['updated_by'] = df['updated_by'].astype(object)
 
         # Cambiar estado a falso y registrar auditoría
         df.loc[df["id"] == codigo_casino, "estado"] = False
@@ -167,45 +170,110 @@ class PlaceStorage:
         return PlaceStorage.inactivar_casino(codigo_casino, actor=actor)
 
     @staticmethod
-    def listar(only_active: bool = True, limit: int | None = None, offset: int = 0) -> list:
-        """Devuelve lista de lugares como dicts. Filtra por activos por defecto."""
+    def listar(solo_activos: bool = True, limite: int | None = None, desplazamiento: int = 0, consulta: str | None = None) -> list:
+        """Devuelve lista de lugares como dicts. Filtra por activos por defecto.
+
+        Args:
+            solo_activos: si True, devuelve solo filas con `estado == True`.
+            limite: cantidad máxima de resultados (None = sin límite).
+            desplazamiento: desplazamiento para paginación.
+            consulta: texto libre para buscar en `nombre`, `direccion` o `codigo_casino`.
+        """
         PlaceStorage._ensure_csv_exists()
         df = pd.read_csv(PLACES_CSV)
 
         if df.empty:
             return []
 
-        if only_active and 'estado' in df.columns:
+        # Filtrar por estado (activo) si se solicita
+        if solo_activos and 'estado' in df.columns:
             df = df[df['estado'] == True]
+
+        # Filtrado por texto si se proporciona `consulta`
+        if consulta:
+            texto = consulta.strip().lower()
+            if texto:
+                mask_nombre = df['nombre'].astype(str).str.lower().str.contains(texto, na=False)
+                mask_direccion = df['direccion'].astype(str).str.lower().str.contains(texto, na=False)
+                mask_codigo = df['codigo_casino'].astype(str).str.lower().str.contains(texto, na=False)
+                df = df[mask_nombre | mask_direccion | mask_codigo]
 
         # Orden por id para consistencia
         if 'id' in df.columns:
             df = df.sort_values('id')
 
-        if offset:
-            df = df.iloc[offset:]
-        if limit is not None:
-            df = df.iloc[:limit]
+        if desplazamiento:
+            df = df.iloc[desplazamiento:]
+        if limite is not None:
+            df = df.iloc[:limite]
 
         # Normalizar filas a dicts
         return df.fillna('').to_dict(orient='records')
 
     @staticmethod
-    def obtener_por_id(place_id: int) -> dict | None:
+    def actualizar_fila(id_lugar: int, cambios: Dict, actor: str = "system") -> dict | None:
+        """
+        Actualiza una fila existente aplicando `cambios`.
+
+        - No permite modificar `codigo_casino` (se preserva inmutable).
+        - Actualiza campos de auditoría `updated_at` y `updated_by`.
+
+        Retorna el dict actualizado o None si no existe.
+        """
         PlaceStorage._ensure_csv_exists()
         df = pd.read_csv(PLACES_CSV)
 
         if df.empty:
             return None
 
-        row = df.loc[df['id'] == place_id]
+        if id_lugar not in df['id'].values:
+            return None
+
+        # Verificar inmutabilidad de codigo_casino
+        if 'codigo_casino' in cambios:
+            existente = df.loc[df['id'] == id_lugar, 'codigo_casino'].astype(str).iloc[0]
+            nuevo = str(cambios.get('codigo_casino', '')).strip()
+            if nuevo and nuevo.upper() != str(existente).upper():
+                raise ValueError("El 'codigo_casino' no se puede modificar una vez creado")
+
+        # Asegurar columnas de auditoría y tipos como objeto para evitar warnings
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if 'updated_at' not in df.columns:
+            df['updated_at'] = ''
+        if 'updated_by' not in df.columns:
+            df['updated_by'] = ''
+        df['updated_at'] = df['updated_at'].astype(object)
+        df['updated_by'] = df['updated_by'].astype(object)
+
+        # Aplicar cambios sobre la fila
+        idx = df.index[df['id'] == id_lugar][0]
+        for k, v in cambios.items():
+            if k in df.columns and k != 'id':
+                df.at[idx, k] = v
+
+        df.at[idx, 'updated_at'] = timestamp
+        df.at[idx, 'updated_by'] = actor
+
+        df.to_csv(PLACES_CSV, index=False)
+
+        return df.loc[df['id'] == id_lugar].iloc[0].to_dict()
+
+    @staticmethod
+    def obtener_por_id(id_lugar: int) -> dict | None:
+        PlaceStorage._ensure_csv_exists()
+        df = pd.read_csv(PLACES_CSV)
+
+        if df.empty:
+            return None
+
+        row = df.loc[df['id'] == id_lugar]
         if row.empty:
             return None
 
         return row.iloc[0].to_dict()
 
     @staticmethod
-    def existe_nombre(nombre: str, exclude_id: int | None = None) -> bool:
+    def existe_nombre(nombre: str, excluir_id: int | None = None) -> bool:
         """Verifica si ya existe un nombre (case-insensitive)."""
         PlaceStorage._ensure_csv_exists()
         df = pd.read_csv(PLACES_CSV)
@@ -216,8 +284,8 @@ class PlaceStorage:
         comp = df['nombre'].astype(str).str.strip().str.lower()
         target = nombre.strip().lower()
 
-        if exclude_id is not None and 'id' in df.columns:
-            df = df[df['id'] != exclude_id]
+        if excluir_id is not None and 'id' in df.columns:
+            df = df[df['id'] != excluir_id]
             comp = df['nombre'].astype(str).str.strip().str.lower()
 
         return target in comp.values
